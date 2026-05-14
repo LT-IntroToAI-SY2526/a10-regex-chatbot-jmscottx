@@ -41,7 +41,6 @@ def get_page_html(title: str) -> str:
     raise ConnectionError(f"Could not retrieve Wikipedia page for '{title}' after 5 attempts")
 
 
-
 def get_first_infobox_text(html: str) -> str:
     """Gets first infobox html from a Wikipedia page (summary box)
 
@@ -132,6 +131,23 @@ def get_birth_date(name: str) -> str:
 
     return match.group("birth")
 
+def get_official_language(place: str) -> str:
+    """Gets the official language of the given place"""
+    search_term = place.strip().title()
+    html = get_page_html(search_term)
+    infobox_text = clean_text(get_first_infobox_text(html))
+    #print(infobox_text)
+    
+    # Regex looks for "Official language" followed by the first word(s)
+    # until it hits a newline or a bracketed reference.
+    pattern =r"Official\s+languages?\s*(?P<lang>[A-Z][a-z]+)"
+    error_text = f"I found the page for {search_term}, but couldn't identify the official language."
+    
+    match_obj = get_match(infobox_text, pattern, error_text)
+    return match_obj.group("lang").strip()
+
+
+
 def get_death_date(name: str) -> str:
     html = get_page_html(name)
     if html.startswith("ERROR"):
@@ -154,61 +170,40 @@ def get_death_date(name: str) -> str:
 
     return match.group("death")
 
+def get_capital_city(place: str) -> str:
+    """Gets capital city of a state/country."""
 
-def get_population(place: str) -> str:
-    """Gets population of a city/country safely and robustly."""
     html = get_page_html(place)
 
-    # Handle network or API errors
-    if html.startswith("ERROR"):
-        return html
+    soup = BeautifulSoup(html, "html.parser")
 
-    try:
-        infobox_text = clean_text(get_first_infobox_text(html))
-    except Exception:
-        return "Population not found"
+    infobox = soup.find("table", class_=lambda x: x and "infobox" in x)
 
-    # Match first population number after any 'Population' label
-    pattern = r"Population[^0-9]+(?P<pop>[0-9][0-9,]*)"
-    match = re.search(pattern, infobox_text, re.IGNORECASE)
-
-    if not match:
-        return "Population not found"
-
-    return match.group("pop")
-
-
-def get_capital_city(country: str) -> str:
-    """Gets the capital city of a country safely and robustly."""
-    html = get_page_html(country)
-
-    # Handle network or API errors
-    if html.startswith("ERROR"):
-        return html
-
-    try:
-        infobox_text = clean_text(get_first_infobox_text(html))
-    except Exception:
+    if not infobox:
         return "Capital city not found"
 
-    # Capture text after "Capital" up to newline
-    pattern = r"Capital[^A-Za-z]+(?P<cap>[A-Za-z ,()]+)"
-    match = re.search(pattern, infobox_text, re.IGNORECASE)
+    rows = infobox.find_all("tr")
 
-    if not match:
-        return "Capital city not found"
+    for row in rows:
 
-    capital = match.group("cap").strip()
+        header = row.find("th")
 
-    # Remove parentheses like "(executive)"
-    capital = re.sub(r"\([^)]*\)", "", capital).strip()
+        if header and "capital" in header.get_text().lower():
 
-    # If multiple capitals listed, return the first
-    if "," in capital:
-        capital = capital.split(",")[0].strip()
+            td = row.find("td")
 
-    return capital
+            if td:
 
+                text = td.get_text(" ", strip=True)
+
+                text = re.sub(r"\[\d+\]", "", text)
+
+                words = text.split()
+
+                if words:
+                    return words[0]
+
+    return "Capital city not found"
 
 # below are a set of actions. Each takes a list argument and returns a list of answers
 # according to the action and the argument. It is important that each function returns a
@@ -243,16 +238,32 @@ def death_date(matches: List[str]) -> List[str]:
     result = get_death_date(name)
     return [result]
 
-def population(matches: List[str]) -> List[str]:
-    place = " ".join(matches).strip()
-    result = get_population(place)
-    return [result]
+def get_birth_place(name: str) -> str:
+    infobox_text = clean_text(get_first_infobox_text(get_page_html(name)))
 
-def capital_city(matches: List[str]) -> List[str]:
-    country = " ".join(matches).strip()
-    result = get_capital_city(country)
-    return [result]
+    pattern = r"Born.*?\d{4}[^\w]*([A-Za-z .'-]+,[A-Za-z .'-]+)"
+    match = re.search(pattern, infobox_text)
 
+    if match:
+        return match.group(1).strip()
+
+    pattern2 = r"Born[\s\S]*?\(age \d+\)\s*([A-Za-z .'-]+,[A-Za-z .'-]+)(?=Afghanistan|Albania|Algeria|Andorra|Angola|Antigua|Argentina|Armenia|Australia|Austria|Azerbaijan|Baden|Bahamas|Bahrain|Bangladesh|Barbados|Bavaria|Belarus|Belgium|Belize|Benin|Bolivia|Bosnia|Botswana|Brazil|Brunei|Brunswick|Bulgaria|Burkina|Burma|Burundi|Cabo|Cambodia|Cameroon|Canada|Cayman|Central|Chad|Chile|China|Colombia|Comoros|Congo|Cook|Costa|Cote|Croatia|Cuba|Cyprus|Czechia|Czechoslovakia|Democratic|Denmark|Djibouti|Dominica|Dominican|Duchy|East|Ecuador|Egypt|El|Equatorial|Eritrea|Estonia|Eswatini|Ethiopia|Federal|Fiji|Finland|France|Gabon|Gambia|Georgia|Germany|Ghana|Grand|Greece|Grenada|Guatemala|Guinea|Guyana|Haiti|Hanover|Hanseatic|Hawaii|Hesse|Holy|Honduras|Hungary|Iceland|India|Indonesia|Iran|Iraq|Ireland|Israel|Italy|Jamaica|Japan|Jordan|Kazakhstan|Kenya|Kingdom|Kiribati|Korea|Kosovo|Kuwait|Kyrgyzstan|Laos|Latvia|Lebanon|Lesotho|Lew|Liberia|Libya|Liechtenstein|Lithuania|Luxembourg|Madagascar|Malawi|Malaysia|Maldives|Mali|Malta|Marshall|Mauritania|Mauritius|Mecklenburg-Schwerin|Mecklenburg-Strelitz|Mexico|Micronesia|Moldova|Monaco|Mongolia|Montenegro|Morocco|Mozambique|Namibia|Nassau|Nauru|Nepal|Netherlands|New|Nicaragua|Niger|Nigeria|Niue|North|Norway|Oldenburg|Oman|Orange|Pakistan|Palau|Panama|Papal|Papua|Paraguay|Peru|Philippines|Piedmont-Sardinia|Poland|Portugal|Qatar|Republic|Romania|Russia|Rwanda|Saint|Samoa|San|Sao|Saudi|Schaumburg-Lippe|Senegal|Serbia|Seychelles|Sierra|Singapore|Slovakia|Slovenia|Solomon|Somalia|South|Spain|Sri|Sudan|Suriname|Sweden|Switzerland|Syria|Tajikistan|Tanzania|Texas|Thailand|Timor-Leste|Togo|Tonga|Trinidad|Tunisia|Turkey|Turkmenistan|Tuvalu|Two|Uganda|Ukraine|Union|United|Uruguay|Uzbekistan|Vanuatu|Venezuela|Vietnam|Württemberg|Yemen|Zambia|Zimbabwe)"
+    match2 = re.search(pattern2, infobox_text)
+    if match2:
+        birthplace = match2.group(1).strip()
+        return birthplace
+    
+
+    return "Unknown"
+
+def birth_place(matches):
+    
+    return [get_birth_place(" ".join(matches))]
+
+
+def official_language(matches: List[str]) -> List[str]:
+    """Action function for the official language query."""
+    return [get_official_language(" ".join(matches))]
 
 # dummy argument is ignored and doesn't matter
 def bye_action(dummy: List[str]) -> None:
@@ -272,9 +283,10 @@ pa_list: List[Tuple[Pattern, Action]] = [
 
     # NEW FEATURES
     ("when did % die".split(), death_date),
-    ("what is the population of %".split(), population),
-    ("what is the capital of %".split(), capital_city),
+   
+    ("where was % born".split(),birth_place),
 
+    ("what language do they speak in %".split(), official_language),
     (["bye"], bye_action),
 ]
 
@@ -301,6 +313,7 @@ def search_pa_list(src: List[str]) -> List[str]:
     return ["I don't understand"]
 
 
+
 def query_loop() -> None:
     """The simple query loop. The try/except structure is to catch Ctrl-C or Ctrl-D
     characters and exit gracefully"""
@@ -319,6 +332,5 @@ def query_loop() -> None:
     print("\nSo long!\n")
 
 
-# uncomment the next line once you've implemented everything are ready to try it out
+# uncomment the next line once you've implemented everything are ready to try it out. death date, off. language, birthplace
 query_loop()
-
