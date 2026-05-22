@@ -1,3 +1,4 @@
+import json
 import re, string, calendar, requests, time
 from bs4 import BeautifulSoup
 from match import match
@@ -112,6 +113,25 @@ def get_polar_radius(planet_name: str) -> str:
 
     return match.group("radius")
 
+
+def get_birth_date(name: str) -> str:
+    """Gets birth date of the given person
+
+    Args:
+        name - name of the person
+
+    Returns:
+        birth date of the given person
+    """
+    infobox_text = clean_text(get_first_infobox_text(get_page_html(name)))
+    pattern = r"(?:Born\D*)(?P<birth>\d{4}-\d{2}-\d{2})"
+    error_text = (
+        "Page infobox has no birth information (at least none in xxxx-xx-xx format)"
+    )
+    match = get_match(infobox_text, pattern, error_text)
+
+    return match.group("birth")
+
 def get_official_language(place: str) -> str:
     """Gets the official language of the given place"""
     search_term = place.strip().title()
@@ -126,28 +146,6 @@ def get_official_language(place: str) -> str:
     
     match_obj = get_match(infobox_text, pattern, error_text)
     return match_obj.group("lang").strip()
-
-def get_death_date(name: str) -> str:
-    html = get_page_html(name)
-    if html.startswith("ERROR"):
-        return html  # return the error message directly
-
-    infobox_text = clean_text(get_first_infobox_text(html))
-
-    pattern = (
-        r"(?:Died\D*)"
-        r"(?P<death>"
-        r"\d{4}-\d{2}-\d{2}"
-        r"|[A-Za-z]+ \d{1,2}, \d{4}"
-        r"|\d{1,2} [A-Za-z]+ \d{4}"
-        r")"
-    )
-
-    match = re.search(pattern, infobox_text, re.IGNORECASE)
-    if not match:
-        return "Death date not found"
-
-    return match.group("death")
 
 def get_capital_city(place: str) -> str:
     """Gets capital city of a state/country."""
@@ -184,18 +182,24 @@ def get_capital_city(place: str) -> str:
 
     return "Capital city not found"
 
+# below are a set of actions. Each takes a list argument and returns a list of answers
+# according to the action and the argument. It is important that each function returns a
+# list of the answer(s) and not just the answer itself.
 
-# ----------------------------
-# COLLEGE CITY + STATE
-# ----------------------------
+# ==========================================
+# NEW FEATURE: CITY & STATE OF A COLLEGE
+# ==========================================
+
 def get_college_location(college: str) -> str:
+
     infobox = clean_text(get_first_infobox_text(get_page_html(college)))
 
     pattern = r"Location\s*(?P<loc>[A-Za-z .'-]+,\s*[A-Za-z .'-]+)"
+
     match = get_match(
         infobox,
         pattern,
-        "College location not found"
+        "Location not found"
     )
 
     return match.group("loc").strip()
@@ -205,13 +209,21 @@ def college_location(matches):
     return [get_college_location(" ".join(matches))]
 
 
-# ----------------------------
-# MUSIC ALBUM RELEASE DATE
-# ----------------------------
-def get_album_release_date(album: str) -> str:
+# ==========================================
+# NEW FEATURE: RELEASE DATE OF ALBUM
+# ==========================================
+
+def get_album_release(album: str):
+
     infobox = clean_text(get_first_infobox_text(get_page_html(album)))
 
-    pattern = r"Released\s*(?P<date>[A-Za-z]+\s+\d{1,2},?\s+\d{4})"
+    pattern = (
+        r"Released\s*"
+        r"(?P<date>"
+        r"[A-Za-z]+\s+\d{1,2},\s+\d{4}"
+        r"|[A-Za-z]+\s+\d{4}"
+        r")"
+    )
 
     match = get_match(
         infobox,
@@ -219,43 +231,53 @@ def get_album_release_date(album: str) -> str:
         "Release date not found"
     )
 
-    return match.group("date").strip()
+    return match.group("date")
 
 
 def album_release(matches):
-    return [get_album_release_date(" ".join(matches))]
+    return [get_album_release(" ".join(matches))]
 
 
-# ----------------------------
-# MOST POPULAR SONG OF ARTIST
-# (Spotify-style approximation)
-# ----------------------------
-def get_most_popular_song(artist: str) -> str:
+# ==========================================
+# NEW FEATURE: MOST POPULAR SONG
+# ==========================================
 
-    html = get_page_html(f"{artist} discography")
+def get_most_popular_song(artist):
 
-    soup = BeautifulSoup(html, "html.parser")
+    try:
 
-    text = clean_text(soup.get_text())
+        url = "https://open.spotify.com/search/" + artist
 
-    pattern = r"Singles.*?\"([^\"]+)\""
+        page = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10
+        )
 
-    result = re.search(pattern, text, re.DOTALL)
+        text = page.text
 
-    if result:
-        return result.group(1)
+        pattern = r'"name":"([^"]+)"'
 
-    return "Most popular song not found"
+        songs = re.findall(pattern, text)
+
+        if songs:
+            return songs[0]
+
+    except:
+        pass
+
+    return "Popular song not found"
 
 
 def popular_song(matches):
     return [get_most_popular_song(" ".join(matches))]
 
 
-# ----------------------------
-# COLLEGE ACCEPTANCE RATE
-# ----------------------------
-def get_acceptance_rate(college: str):
+# ==========================================
+# NEW FEATURE: ACCEPTANCE RATE
+# ==========================================
+
+def get_acceptance_rate(college):
 
     infobox = clean_text(get_first_infobox_text(get_page_html(college)))
 
@@ -274,14 +296,15 @@ def acceptance_rate(matches):
     return [get_acceptance_rate(" ".join(matches))]
 
 
-# ----------------------------
-# NFL TEAM COACH
-# ----------------------------
-def get_nfl_coach(team: str):
+# ==========================================
+# NEW FEATURE: NFL COACH
+# ==========================================
+
+def get_nfl_coach(team):
 
     infobox = clean_text(get_first_infobox_text(get_page_html(team)))
 
-    pattern = r"Head coach\s*(?P<coach>[A-Za-z .'-]+)"
+    pattern = r"(?:Head coach)\s*(?P<coach>[A-Za-z .'-]+)"
 
     match = get_match(
         infobox,
@@ -292,9 +315,21 @@ def get_nfl_coach(team: str):
     return match.group("coach").strip()
 
 
-# below are a set of actions. Each takes a list argument and returns a list of answers
-# according to the action and the argument. It is important that each function returns a
-# list of the answer(s) and not just the answer itself.
+def nfl_coach(matches):
+    return [get_nfl_coach(" ".join(matches))]
+
+
+def birth_date(matches: List[str]) -> List[str]:
+    """Returns birth date of named person in matches
+
+    Args:
+        matches - match from pattern of person's name to find birth date of
+
+    Returns:
+        birth date of named person
+    """
+    return [get_birth_date(" ".join(matches))]
+
 
 def polar_radius(matches: List[str]) -> List[str]:
     """Returns polar radius of planet in matches
@@ -329,10 +364,6 @@ def birth_place(matches):
     
     return [get_birth_place(" ".join(matches))]
 
-def death_date(matches: List[str]) -> List[str]:
-    name = " ".join(matches).strip()
-    result = get_death_date(name)
-    return [result]
 
 def official_language(matches: List[str]) -> List[str]:
     """Action function for the official language query."""
@@ -350,31 +381,36 @@ Action = Callable[[List[str]], List[Any]]
 
 # The pattern-action list for the natural language query system. It must be declared
 # here, after all of the function definitions
-pa_list: List[Tuple[Pattern, Action]] = [
+pa_list = [
+
+    ("when was % born".split(), birth_date),
+
     ("what is the polar radius of %".split(), polar_radius),
 
-    # NEW FEATURES
-    ("when did % die".split(), death_date),
-   
-    ("where was % born".split(),birth_place),
+    ("where was % born".split(), birth_place),
 
     ("what language do they speak in %".split(), official_language),
-    (["bye"], bye_action),
 
+    # NEW FEATURES
+
+    ("what city and state is % in".split(),
+     college_location),
+
+    ("when was % released".split(),
+     album_release),
+
+    ("what is the most popular song by %".split(),
+     popular_song),
+
+    ("what is the acceptance rate of %".split(),
+     acceptance_rate),
+
+    ("who is the coach of %".split(),
+     nfl_coach),
+
+    (["bye"], bye_action),
 ]
 
-def nfl_coach(matches):
-    return [get_nfl_coach(" ".join(matches))]
-
-("what city and state is % in".split(), college_location),
-
-("when was % released".split(), album_release),
-
-("what is the most popular song by %".split(), popular_song),
-
-("what is the acceptance rate of %".split(), acceptance_rate),
-
-("who is the coach of %".split(), nfl_coach),
 
 
 def search_pa_list(src: List[str]) -> List[str]:
@@ -396,7 +432,6 @@ def search_pa_list(src: List[str]) -> List[str]:
             return answer if answer else ["No answers"]
 
     return ["I don't understand"]
-
 
 
 def query_loop() -> None:
