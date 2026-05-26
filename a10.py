@@ -260,17 +260,19 @@ def get_most_popular_song(artist: str) -> str:
 # ==========================================
 
 def get_acceptance_rate(college: str) -> str:
-    infobox = clean_text(get_first_infobox_text(get_page_html(college)))
+    html = get_page_html(college)
+    text = clean_text(html)
 
     # Match formats like:
-    # 5%
-    # 4.8%
-    # ~5%
-    # 5% (2023)
-    pattern = r"Acceptance rate[^0-9]*(?P<rate>\d+\.?\d*\s*%)"
-    match = re.search(pattern, infobox, re.IGNORECASE)
+    # "acceptance rate 3.4%"
+    # "acceptance rate was 4%"
+    # "an acceptance rate of 5%"
+    pattern = r"acceptance rate[^0-9]*(?P<rate>\d+\.?\d*\s*%)"
 
+    match = re.search(pattern, text, re.IGNORECASE)
     return match.group("rate") if match else "Acceptance rate not found"
+
+
 
 
 # ==========================================
