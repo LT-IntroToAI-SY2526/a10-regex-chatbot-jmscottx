@@ -214,86 +214,63 @@ def college_location(matches):
 # ==========================================
 
 def get_album_release(album: str):
-
-    infobox = clean_text(get_first_infobox_text(get_page_html(album)))
+    # Force Wikipedia to search for the album page
+    html = get_page_html(album + " album")
+    infobox = clean_text(get_first_infobox_text(html))
 
     pattern = (
-        r"Released\s*"
-        r"(?P<date>"
-        r"[A-Za-z]+\s+\d{1,2},\s+\d{4}"
-        r"|[A-Za-z]+\s+\d{4}"
-        r")"
+        r"(Released|Release date)\s*"
+        r"(?P<date>[A-Za-z]+\s+\d{1,2},\s*\d{4}|[A-Za-z]+\s+\d{4})"
     )
 
-    match = get_match(
-        infobox,
-        pattern,
-        "Release date not found"
-    )
-
-    return match.group("date")
+    match = re.search(pattern, infobox, re.IGNORECASE)
+    return match.group("date") if match else "Release date not found"
 
 
-def album_release(matches):
-    return [get_album_release(" ".join(matches))]
+
 
 
 # ==========================================
 # NEW FEATURE: MOST POPULAR SONG
 # ==========================================
 
-def get_most_popular_song(artist):
+def get_most_popular_song(artist: str) -> str:
+    # Search for the artist's discography page
+    html = get_page_html(artist + " discography")
+    text = clean_text(html)
 
-    try:
+    # Look for a "Singles" section
+    pattern = r"Singles\s*\n.*?\n(?P<song>[A-Za-z0-9 .'\-]+)"
+    match = re.search(pattern, text, re.IGNORECASE)
 
-        url = "https://open.spotify.com/search/" + artist
+    if match:
+        return match.group("song").strip()
 
-        page = requests.get(
-            url,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=10
-        )
+    # Backup: look for "Notable singles"
+    pattern2 = r"Notable singles\s*\n.*?\n(?P<song>[A-Za-z0-9 .'\-]+)"
+    match2 = re.search(pattern2, text, re.IGNORECASE)
 
-        text = page.text
-
-        pattern = r'"name":"([^"]+)"'
-
-        songs = re.findall(pattern, text)
-
-        if songs:
-            return songs[0]
-
-    except:
-        pass
+    if match2:
+        return match2.group("song").strip()
 
     return "Popular song not found"
-
-
-def popular_song(matches):
-    return [get_most_popular_song(" ".join(matches))]
-
 
 # ==========================================
 # NEW FEATURE: ACCEPTANCE RATE
 # ==========================================
 
-def get_acceptance_rate(college):
-
+def get_acceptance_rate(college: str) -> str:
     infobox = clean_text(get_first_infobox_text(get_page_html(college)))
 
-    pattern = r"Acceptance rate\s*(?P<rate>\d+\.?\d*%)"
+    # Match formats like:
+    # 5%
+    # 4.8%
+    # ~5%
+    # 5% (2023)
+    pattern = r"Acceptance rate[^0-9]*(?P<rate>\d+\.?\d*\s*%)"
+    match = re.search(pattern, infobox, re.IGNORECASE)
 
-    match = get_match(
-        infobox,
-        pattern,
-        "Acceptance rate not found"
-    )
-
-    return match.group("rate")
-
-
-def acceptance_rate(matches):
-    return [get_acceptance_rate(" ".join(matches))]
+    return match.group("rate") if match else "Acceptance rate not found"
 
 
 # ==========================================
@@ -372,6 +349,15 @@ def official_language(matches: List[str]) -> List[str]:
 # dummy argument is ignored and doesn't matter
 def bye_action(dummy: List[str]) -> None:
     raise KeyboardInterrupt
+
+def album_release(matches):
+    return [get_album_release(" ".join(matches))]
+
+def popular_song(matches):
+    return [get_most_popular_song(" ".join(matches))]
+
+def acceptance_rate(matches):
+    return [get_acceptance_rate(" ".join(matches))]
 
 
 # type aliases to make pa_list type more readable, could also have written:
