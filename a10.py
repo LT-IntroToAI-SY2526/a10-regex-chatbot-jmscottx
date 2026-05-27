@@ -235,23 +235,174 @@ def get_album_release(album: str):
 # ==========================================
 
 def get_most_popular_song(artist: str) -> str:
-    # Search for the artist's discography page
-    html = get_page_html(artist + " discography")
-    text = clean_text(html)
+    # External-first fallback: Last.fm top tracks page (often lists popular tracks without an API)
+    try:
+        slug = re.sub(r"[^A-Za-z0-9 ]", "", artist).strip().replace(" ", "+")
+        url = f"https://www.last.fm/music/{slug}/+tracks"
+        resp = requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200 and resp.text:
+            soup_l = BeautifulSoup(resp.text, "html.parser")
+            td = soup_l.find("td", class_="chartlist-name")
+            if td:
+                a = td.find("a")
+                if a:
+                    title = a.get("title") or a.get_text(strip=True)
+                    if title:
+                        return re.sub(r"\[\d+\]", "", title).strip()
+    except Exception:
+        pass
 
-    # Look for a "Singles" section
-    pattern = r"Singles\s*\n.*?\n(?P<song>[A-Za-z0-9 .'\-]+)"
-    match = re.search(pattern, text, re.IGNORECASE)
+    # Try the main artist page first and look in the infobox for "Notable" entries
+    html_main = ""
+    disc_html = ""
+    try:
+        html_main = get_page_html(artist)
+        soup = BeautifulSoup(html_main, "html.parser")
+        infobox = soup.find("table", class_=lambda x: x and "infobox" in x)
+        if infobox:
+            for row in infobox.find_all("tr"):
+                header = row.find("th")
+                if header:
+                    htext = header.get_text(" ", strip=True).lower()
+                    if "notable" in htext or "notable works" in htext or "notable singles" in htext or "notable songs" in htext:
+                        td = row.find("td")
+                        if td:
+                            # prefer the first linked title
+                            a = td.find("a")
+                            if a and a.get_text(strip=True):
+                                return re.sub(r"\[\d+\]", "", a.get_text(strip=True))
+                            # otherwise use plain text and split on common separators
+                            txt = clean_text(td.get_text(" ", strip=True))
+                            first = re.split(r";|,|\n", txt)[0]
+                            first = re.sub(r"\s*\(.*?\)", "", first)
+                            first = re.sub(r"\[\d+\]", "", first).strip()
+                            if first:
+                                return first
+    except Exception:
+        pass
 
-    if match:
-        return match.group("song").strip()
+    # Scan paragraphs and list items on the main page for mentions of 'single' and return a linked title
+    try:
+        if html_main:
+            soup_main = BeautifulSoup(html_main, "html.parser")
+            # First, look in the lead paragraph(s) for quoted song titles or first sensible links
+            parser_output = soup_main.find("div", class_="mw-parser-output") or soup_main
+            for p in parser_output.find_all("p", recursive=False):
+                ptext = p.get_text(" ", strip=True)
+                # look for quoted titles
+                m = re.search(r"[“\"'‘](?P<title>[A-Z][^\"’”']{2,80})[”\"'’]", ptext)
+                if m:
+                    return m.group("title").strip()
+                for a in p.find_all("a"):
+                    txt = a.get_text(strip=True)
+                    href = a.get("href", "")
+                    title_attr = a.get("title", "")
+                    txt_lower = txt.lower()
+                    # Prefer links that explicitly look like song pages (title attribute contains 'song'/'single')
+                    if title_attr and ("(song" in title_attr.lower() or "(single" in title_attr.lower()):
+                        return re.sub(r"\[\d+\]", "", txt)
+                    # Heuristic: link text that looks like a song title (Capitalized, more than one word,
+                    # not the artist name and not a generic descriptor)
+                    if href.startswith("/wiki/") and txt and txt[0].isupper() and txt.count(" ") >= 1:
+                        bad_words = ("born", "american", "british", "band", "group", "singer", "composer", "album", "discography")
+                        if not any(b in txt_lower for b in bad_words) and not txt_lower.startswith(artist.lower()):
+                            return re.sub(r"\[\d+\]", "", txt)
 
-    # Backup: look for "Notable singles"
-    pattern2 = r"Notable singles\s*\n.*?\n(?P<song>[A-Za-z0-9 .'\-]+)"
-    match2 = re.search(pattern2, text, re.IGNORECASE)
+            # Fallback: scan paragraphs and list items for mentions of 'single' and return a linked title
+            for tag in soup_main.find_all(["p", "li"]):
+                txt = tag.get_text(" ", strip=True).lower()
+                if "single" in txt:
+                    for a in tag.find_all("a"):
+                        title_attr = a.get("title", "")
+                        txt_a = a.get_text(strip=True)
+                        if title_attr and ("(song" in title_attr.lower() or "(single" in title_attr.lower()):
+                            return re.sub(r"\[\d+\]", "", txt_a)
+                        if txt_a and txt_a[0].isupper() and txt_a.count(" ") >= 1:
+                            return re.sub(r"\[\d+\]", "", txt_a)
+    except Exception:
+        pass
 
-    if match2:
-        return match2.group("song").strip()
+    # Next try the artist's discography page and look for a Singles section
+    try:
+        disc_html = get_page_html(artist + " discography")
+        soup = BeautifulSoup(disc_html, "html.parser")
+        for header_tag in soup.find_all(["h2", "h3"]):
+            header_text = header_tag.get_text(" ", strip=True).lower()
+            if "singles" in header_text:
+                # search following siblings for a list or table; also look inside wrapper tags
+                sib = None
+                for sibling in header_tag.next_siblings:
+                    if getattr(sibling, "name", None) and sibling.name in ("h2", "h3"):
+                        break
+                    if getattr(sibling, "name", None) and sibling.name in ("ul", "ol", "table"):
+                        sib = sibling
+                        break
+                    if hasattr(sibling, "find"):
+                        inner = sibling.find(["ul", "ol", "table"])
+                        if inner:
+                            sib = inner
+                            break
+                if not sib:
+                    continue
+                if sib.name in ("ul", "ol"):
+                    li = sib.find("li")
+                    if li:
+                        a = li.find("a")
+                        if a and a.get_text(strip=True):
+                            return re.sub(r"\[\d+\]", "", a.get_text(strip=True))
+                        return re.sub(r"\[\d+\]", "", clean_text(li.get_text(" ", strip=True))).strip()
+                if sib.name == "table":
+                    # Try to locate a 'Title' column header and use that column's first data row.
+                    headers = sib.find_all('th')
+                    title_col = None
+                    for idx, th in enumerate(headers):
+                        if 'title' in th.get_text(" ", strip=True).lower():
+                            title_col = idx
+                            break
+
+                    rows = sib.find_all('tr')
+                    data_rows = [r for r in rows if r.find_all('td')]
+
+                    if title_col is not None:
+                        for r in data_rows:
+                            cells = r.find_all(['td', 'th'])
+                            if len(cells) > title_col:
+                                cell = cells[title_col]
+                                a = cell.find('a')
+                                if a and a.get_text(strip=True):
+                                    return re.sub(r"\[\d+\]", "", a.get_text(strip=True))
+                                text = clean_text(cell.get_text(" ", strip=True))
+                                text = re.sub(r"\[\d+\]", "", text).strip()
+                                if text:
+                                    return text
+
+                    # Fallback: find the first reasonable link in data rows (avoid links to other discography pages)
+                    for r in data_rows:
+                        for a in r.find_all('a'):
+                            txt = a.get_text(strip=True)
+                            href = a.get('href', '')
+                            if txt and href.startswith('/wiki/') and 'discography' not in href and 'album' not in href:
+                                return re.sub(r"\[\d+\]", "", txt)
+
+                    first_td = sib.find('td')
+                    if first_td:
+                        return re.sub(r"\[\d+\]", "", clean_text(first_td.get_text(" ", strip=True))).strip()
+    except Exception:
+        pass
+
+    # Last resort: search raw text for quoted titles near the word 'single'
+    combined = clean_text((disc_html or "") + "\n" + (html_main or ""))
+    m = re.search(r"[\"'](?P<title>[A-Z][A-Za-z0-9 &'\-,:.!?]+?)[\"'](?=[\s\S]{0,120}?single)", combined)
+    if m:
+        return m.group("title").strip()
+
+    # (Last.fm attempt already tried at the top)
 
     return "Popular song not found"
 
@@ -261,16 +412,61 @@ def get_most_popular_song(artist: str) -> str:
 
 def get_acceptance_rate(college: str) -> str:
     html = get_page_html(college)
+    # try infobox first (more structured)
+    try:
+        infobox = clean_text(get_first_infobox_text(html))
+    except Exception:
+        infobox = ""
+
+    # Prefer parsing the infobox table for a dedicated acceptance/admissions row
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        infobox_table = soup.find("table", class_=lambda x: x and "infobox" in x)
+        if infobox_table:
+            for row in infobox_table.find_all("tr"):
+                header = row.find("th")
+                if header and ("accept" in header.get_text().lower() or "admiss" in header.get_text().lower()):
+                    td = row.find("td")
+                    if td:
+                        td_text = clean_text(td.get_text(" ", strip=True))
+                        mtd = re.search(r"(?P<rate>\d{1,3}(?:\.\d+)?\s*(?:%|percent))", td_text)
+                        if mtd:
+                            return mtd.group("rate").replace("percent", "%").strip()
+    except Exception:
+        pass
+
     text = clean_text(html)
 
-    # Match formats like:
-    # "acceptance rate 3.4%"
-    # "acceptance rate was 4%"
-    # "an acceptance rate of 5%"
-    pattern = r"acceptance rate[^0-9]*(?P<rate>\d+\.?\d*\s*%)"
+    # Broader patterns to match variants like:
+    # "acceptance rate 3.4%", "admissions rate was 4 percent", "acceptance: 8.4% (2022)"
+    # require the word 'rate' near 'acceptance' or 'admission' to avoid matching other
+    # admission-related percentages such as yield rates
+    patterns = [
+        r"(?:acceptance|admission)s?\s*(?:rate|rates|percentage)[^\n%]{0,80}(?P<rate>\d{1,3}(?:\.\d+)?\s*(?:%|percent))",
+        r"(?P<rate>\d{1,3}(?:\.\d+)?\s*(?:%|percent))\s*(?:acceptance|admission)s?\s*(?:rate|rates)?",
+    ]
 
-    match = re.search(pattern, text, re.IGNORECASE)
-    return match.group("rate") if match else "Acceptance rate not found"
+    for p in patterns:
+        m = re.search(p, infobox, re.IGNORECASE)
+        if m:
+            return m.group("rate").replace("percent", "%").strip()
+
+    for p in patterns:
+        m = re.search(p, text, re.IGNORECASE)
+        if m:
+            return m.group("rate").replace("percent", "%").strip()
+
+    # fallback: any nearby percent number with 'accept' or 'admiss' within a small window
+    m = re.search(r"(?P<rate>\d{1,3}(?:\.\d+)?\s*%)", text)
+    if m:
+        window = text[max(0, m.start() - 80) : m.end() + 80].lower()
+        if "accept" in window or "admiss" in window:
+            return m.group("rate").strip()
+
+    # If we couldn't find a structured acceptance/admission percentage on Wikipedia,
+    # fall back to reporting not found. External site fallbacks were removed to avoid
+    # unreliable network/timeouts in this environment.
+    return "Acceptance rate not found"
 
 
 
