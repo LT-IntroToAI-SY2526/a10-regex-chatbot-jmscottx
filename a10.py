@@ -256,180 +256,10 @@ def get_album_release(album: str):
 
 
 # ==========================================
-# NEW FEATURE: MOST POPULAR SONG
+# GENRE
 # ==========================================
 
-def get_most_popular_song(artist: str) -> str:
-    # External-first fallback: Last.fm top tracks page (often lists popular tracks without an API)
-    try:
-        slug = re.sub(r"[^A-Za-z0-9 ]", "", artist).strip().replace(" ", "+")
-        url = f"https://www.last.fm/music/{slug}/+tracks"
-        resp = requests.get(
-            url,
-            headers={
-                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0 Safari/537.36"
-            },
-            timeout=10,
-        )
-        if resp.status_code == 200 and resp.text:
-            soup_l = BeautifulSoup(resp.text, "html.parser")
-            td = soup_l.find("td", class_="chartlist-name")
-            if td:
-                a = td.find("a")
-                if a:
-                    title = a.get("title") or a.get_text(strip=True)
-                    if title:
-                        return re.sub(r"\[\d+\]", "", title).strip()
-    except Exception:
-        pass
 
-    # Try the main artist page first and look in the infobox for "Notable" entries
-    html_main = ""
-    disc_html = ""
-    try:
-        html_main = get_page_html(artist)
-        soup = BeautifulSoup(html_main, "html.parser")
-        infobox = soup.find("table", class_=lambda x: x and "infobox" in x)
-        if infobox:
-            for row in infobox.find_all("tr"):
-                header = row.find("th")
-                if header:
-                    htext = header.get_text(" ", strip=True).lower()
-                    if "notable" in htext or "notable works" in htext or "notable singles" in htext or "notable songs" in htext:
-                        td = row.find("td")
-                        if td:
-                            # prefer the first linked title
-                            a = td.find("a")
-                            if a and a.get_text(strip=True):
-                                return re.sub(r"\[\d+\]", "", a.get_text(strip=True))
-                            # otherwise use plain text and split on common separators
-                            txt = clean_text(td.get_text(" ", strip=True))
-                            first = re.split(r";|,|\n", txt)[0]
-                            first = re.sub(r"\s*\(.*?\)", "", first)
-                            first = re.sub(r"\[\d+\]", "", first).strip()
-                            if first:
-                                return first
-    except Exception:
-        pass
-
-    # Scan paragraphs and list items on the main page for mentions of 'single' and return a linked title
-    try:
-        if html_main:
-            soup_main = BeautifulSoup(html_main, "html.parser")
-            # First, look in the lead paragraph(s) for quoted song titles or first sensible links
-            parser_output = soup_main.find("div", class_="mw-parser-output") or soup_main
-            for p in parser_output.find_all("p", recursive=False):
-                ptext = p.get_text(" ", strip=True)
-                # look for quoted titles
-                m = re.search(r"[“\"'‘](?P<title>[A-Z][^\"’”']{2,80})[”\"'’]", ptext)
-                if m:
-                    return m.group("title").strip()
-                for a in p.find_all("a"):
-                    txt = a.get_text(strip=True)
-                    href = a.get("href", "")
-                    title_attr = a.get("title", "")
-                    txt_lower = txt.lower()
-                    # Prefer links that explicitly look like song pages (title attribute contains 'song'/'single')
-                    if title_attr and ("(song" in title_attr.lower() or "(single" in title_attr.lower()):
-                        return re.sub(r"\[\d+\]", "", txt)
-                    # Heuristic: link text that looks like a song title (Capitalized, more than one word,
-                    # not the artist name and not a generic descriptor)
-                    if href.startswith("/wiki/") and txt and txt[0].isupper() and txt.count(" ") >= 1:
-                        bad_words = ("born", "american", "british", "band", "group", "singer", "composer", "album", "discography")
-                        if not any(b in txt_lower for b in bad_words) and not txt_lower.startswith(artist.lower()):
-                            return re.sub(r"\[\d+\]", "", txt)
-
-            # Fallback: scan paragraphs and list items for mentions of 'single' and return a linked title
-            for tag in soup_main.find_all(["p", "li"]):
-                txt = tag.get_text(" ", strip=True).lower()
-                if "single" in txt:
-                    for a in tag.find_all("a"):
-                        title_attr = a.get("title", "")
-                        txt_a = a.get_text(strip=True)
-                        if title_attr and ("(song" in title_attr.lower() or "(single" in title_attr.lower()):
-                            return re.sub(r"\[\d+\]", "", txt_a)
-                        if txt_a and txt_a[0].isupper() and txt_a.count(" ") >= 1:
-                            return re.sub(r"\[\d+\]", "", txt_a)
-    except Exception:
-        pass
-
-    # Next try the artist's discography page and look for a Singles section
-    try:
-        disc_html = get_page_html(artist + " discography")
-        soup = BeautifulSoup(disc_html, "html.parser")
-        for header_tag in soup.find_all(["h2", "h3"]):
-            header_text = header_tag.get_text(" ", strip=True).lower()
-            if "singles" in header_text:
-                # search following siblings for a list or table; also look inside wrapper tags
-                sib = None
-                for sibling in header_tag.next_siblings:
-                    if getattr(sibling, "name", None) and sibling.name in ("h2", "h3"):
-                        break
-                    if getattr(sibling, "name", None) and sibling.name in ("ul", "ol", "table"):
-                        sib = sibling
-                        break
-                    if hasattr(sibling, "find"):
-                        inner = sibling.find(["ul", "ol", "table"])
-                        if inner:
-                            sib = inner
-                            break
-                if not sib:
-                    continue
-                if sib.name in ("ul", "ol"):
-                    li = sib.find("li")
-                    if li:
-                        a = li.find("a")
-                        if a and a.get_text(strip=True):
-                            return re.sub(r"\[\d+\]", "", a.get_text(strip=True))
-                        return re.sub(r"\[\d+\]", "", clean_text(li.get_text(" ", strip=True))).strip()
-                if sib.name == "table":
-                    # Try to locate a 'Title' column header and use that column's first data row.
-                    headers = sib.find_all('th')
-                    title_col = None
-                    for idx, th in enumerate(headers):
-                        if 'title' in th.get_text(" ", strip=True).lower():
-                            title_col = idx
-                            break
-
-                    rows = sib.find_all('tr')
-                    data_rows = [r for r in rows if r.find_all('td')]
-
-                    if title_col is not None:
-                        for r in data_rows:
-                            cells = r.find_all(['td', 'th'])
-                            if len(cells) > title_col:
-                                cell = cells[title_col]
-                                a = cell.find('a')
-                                if a and a.get_text(strip=True):
-                                    return re.sub(r"\[\d+\]", "", a.get_text(strip=True))
-                                text = clean_text(cell.get_text(" ", strip=True))
-                                text = re.sub(r"\[\d+\]", "", text).strip()
-                                if text:
-                                    return text
-
-                    # Fallback: find the first reasonable link in data rows (avoid links to other discography pages)
-                    for r in data_rows:
-                        for a in r.find_all('a'):
-                            txt = a.get_text(strip=True)
-                            href = a.get('href', '')
-                            if txt and href.startswith('/wiki/') and 'discography' not in href and 'album' not in href:
-                                return re.sub(r"\[\d+\]", "", txt)
-
-                    first_td = sib.find('td')
-                    if first_td:
-                        return re.sub(r"\[\d+\]", "", clean_text(first_td.get_text(" ", strip=True))).strip()
-    except Exception:
-        pass
-
-    # Last resort: search raw text for quoted titles near the word 'single'
-    combined = clean_text((disc_html or "") + "\n" + (html_main or ""))
-    m = re.search(r"[\"'](?P<title>[A-Z][A-Za-z0-9 &'\-,:.!?]+?)[\"'](?=[\s\S]{0,120}?single)", combined)
-    if m:
-        return m.group("title").strip()
-
-    # (Last.fm attempt already tried at the top)
-
-    return "Popular song not found"
 
 # ==========================================
 # NEW FEATURE: ACCEPTANCE RATE
@@ -588,12 +418,41 @@ def bye_action(dummy: List[str]) -> None:
 def album_release(matches):
     return [get_album_release(" ".join(matches))]
 
-def popular_song(matches):
-    return [get_most_popular_song(" ".join(matches))]
-
 def acceptance_rate(matches):
     return [get_acceptance_rate(" ".join(matches))]
 
+def genre(title: str) -> str:
+    html = get_page_html(title)
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    infobox = soup.find(
+        "table",
+        class_=lambda x: x and "infobox" in x
+    )
+
+    if not infobox:
+        return "Genre not found"
+
+    for row in infobox.find_all("tr"):
+
+        header = row.find("th")
+
+        if header and "genre" in header.get_text().lower():
+
+            cell = row.find("td")
+
+            if cell:
+                text = clean_text(
+                    cell.get_text(
+                        " ",
+                        strip=True
+                    )
+                )
+
+                return text
+
+    return "Genre not found"
 
 # type aliases to make pa_list type more readable, could also have written:
 # pa_list: List[Tuple[List[str], Callable[[List[str]], List[Any]]]] = [...]
@@ -603,6 +462,8 @@ Action = Callable[[List[str]], List[Any]]
 # The pattern-action list for the natural language query system. It must be declared
 # here, after all of the function definitions
 pa_list = [
+
+    
 
     ("when was % born".split(), birth_date),
 
@@ -620,8 +481,8 @@ pa_list = [
     ("when was % released".split(),
      album_release),
 
-    ("what is the most popular song by %".split(),
-     popular_song),
+    ("what genre is %".split(),
+    genre),
 
     ("what is the acceptance rate of %".split(),
      acceptance_rate),
